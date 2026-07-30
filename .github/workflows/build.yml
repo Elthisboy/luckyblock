@@ -38,21 +38,37 @@ jobs:
       - name: Build
         run: ./gradlew build --stacktrace
 
+      # IMPORTANT: publish the jars from dist/, not from */build/libs. Only the
+      # exportDist output embeds mod/lucky/java/lucky-config.zip, which the mod
+      # unpacks into config/lucky/<version>-<loader> on first launch. A raw
+      # build/libs jar crashes at startup with NoSuchFileException on that path.
       - name: Upload NeoForge jar
         uses: actions/upload-artifact@v4
         with:
           name: lucky-block-neoforge
-          path: neoforge/build/libs/*.jar
+          path: dist/lucky-block-neoforge-*/lucky-block-neoforge-*.jar
           if-no-files-found: error
 
       - name: Upload Fabric jar
         uses: actions/upload-artifact@v4
         with:
           name: lucky-block-fabric
-          path: fabric/build/libs/*.jar
+          path: dist/lucky-block-fabric-*/lucky-block-fabric-*.jar
           if-no-files-found: error
 
-      # exportDist also produces packaged builds under dist/ with a meta.yaml
+      - name: Verify jars embed the default config
+        shell: bash
+        run: |
+          set -e
+          for jar in dist/lucky-block-*/lucky-block-*.jar; do
+            if unzip -l "$jar" | grep -q "mod/lucky/java/lucky-config.zip"; then
+              echo "ok: $jar"
+            else
+              echo "FAIL: $jar is missing mod/lucky/java/lucky-config.zip"
+              exit 1
+            fi
+          done
+
       - name: Upload dist bundles
         uses: actions/upload-artifact@v4
         with:
