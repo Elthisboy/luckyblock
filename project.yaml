@@ -12,7 +12,7 @@ projects:
         minInclusive: 6.3.0
         maxExclusive: 7
       neoforge:
-        minInclusive: 26.1.2
+        minInclusive: 26.1.0
         maxExclusive: 27.0.0
     lockedDependencies:
       neoforge: 26.1.2.93
