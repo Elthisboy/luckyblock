@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - port/26.1
+      - port/26.2
       - master
       - main
   pull_request:
     branches:
       - port/26.1
+      - port/26.2
       - master
       - main
   workflow_dispatch:

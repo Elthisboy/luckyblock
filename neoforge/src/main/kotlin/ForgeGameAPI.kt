@@ -2,6 +2,7 @@ package mod.lucky.neoforge
 
 //import mod.lucky.neoforge.game.DelayedDrop
 import com.mojang.brigadier.StringReader
+import com.mojang.serialization.MapCodec
 import mod.lucky.common.*
 import mod.lucky.common.Entity
 import mod.lucky.common.attribute.*
@@ -38,7 +39,7 @@ import net.minecraft.world.level.LevelReader
 import net.minecraft.world.level.block.Rotation
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureProcessor
-import net.minecraft.world.level.levelgen.structure.templatesystem.StructureProcessorType
+
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
 import net.minecraft.world.level.storage.TagValueInput
 import java.awt.Color
@@ -137,7 +138,7 @@ object ForgeGameAPI : GameAPI {
             StatusEffect(
                 id = mcId.toString(),
                 isNegative = mcStatusEffect.category == MobEffectCategory.HARMFUL,
-                isInstant = mcStatusEffect.isInstantenous,
+                isInstant = mcStatusEffect.isInstantaneous,
             )
         }
     }
@@ -178,7 +179,7 @@ object ForgeGameAPI : GameAPI {
             return
         }
         val statusEffect = statusEffectHolder.value()
-        val duration = if (statusEffect.isInstantenous) 1 else (durationSeconds * 20.0).toInt()
+        val duration = if (statusEffect.isInstantaneous) 1 else (durationSeconds * 20.0).toInt()
         if (targetEntity is LivingEntity) targetEntity.addEffect(MobEffectInstance(statusEffectHolder, duration, amplifier))
     }
 
@@ -223,7 +224,7 @@ object ForgeGameAPI : GameAPI {
         val sourceItem = BuiltInRegistries.ITEM.getOptional(MCIdentifier.parse(sourceId))
 
         val serverWorld = toServerWorld(world)
-        val entity = EntityType.loadEntityRecursive(mcEntityNBT, serverWorld, EntitySpawnReason.EVENT) { entity ->
+        val entity = EntityType.loadEntityRecursive(mcEntityNBT, serverWorld, EntitySpawnRequest(EntitySpawnReason.EVENT, false)) { entity ->
             val entityRotation = positiveMod(rotation + 2.0, 4.0) // entities face south by default
             val rotationDeg = (entityRotation * 90.0)
             val yaw = positiveMod(entity.yRot + entityRotation, 360.0)
@@ -421,7 +422,10 @@ object ForgeGameAPI : GameAPI {
             return
         }
 
-        val processor = object : StructureProcessor() {
+        // 26.2 turned StructureProcessor from an abstract class into an interface
+        // and replaced getType() with codec(). This processor is applied directly
+        // rather than serialized, so the codec just needs to be well-formed.
+        val processor = object : StructureProcessor {
             override fun process(
                 world: LevelReader,
                 oldPos: MCBlockPos,
@@ -443,8 +447,8 @@ object ForgeGameAPI : GameAPI {
                     else StructureTemplate.StructureBlockInfo(newBlockInfo.pos, newState, newBlockInfo.nbt)
             }
 
-            override fun getType(): StructureProcessorType<*> {
-                return StructureProcessorType.BLOCK_IGNORE
+            override fun codec(): MapCodec<out StructureProcessor> {
+                return MapCodec.unit { this }
             }
         }
 

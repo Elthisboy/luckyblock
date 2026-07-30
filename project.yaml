@@ -1,46 +1,49 @@
 projects:
   lucky-block-neoforge:
-    version: 26.1.2-14.0
+    version: 26.2-14.0
     dependencies:
       java:
         minInclusive: 25
         maxInclusive: 25
       minecraft:
-        minInclusive: 26.1
-        maxExclusive: 26.2
+        minInclusive: 26.2
+        maxExclusive: 26.3
       kotlinforforge:
         minInclusive: 6.3.0
         maxExclusive: 7
       neoforge:
-        minInclusive: 26.1.2
+        minInclusive: 26.2.0
         maxExclusive: 27.0.0
     lockedDependencies:
-      neoforge: 26.1.2.93
+      # NeoForge has no stable build for 26.2 yet; betas are all that is published
+      neoforge: 26.2.0.40-beta
       kotlinforforge: 6.3.0
 
   lucky-block-fabric:
-    version: 26.1.2-14.0
+    version: 26.2-14.0
     dependencies:
       java:
         minInclusive: 25
         maxInclusive: 25
       minecraft:
-        minInclusive: 26.1
-        maxExclusive: 26.2
+        minInclusive: 26.2
+        maxExclusive: 26.3
       # latest: https://fabricmc.net/develop/
       fabric-loader:
         minInclusive: 0.19.3
         maxExclusive: 1.0
       fabric-api:
-        minInclusive: 0.155.2+26.1.2
-        maxInclusive: 0.155.2+26.1.2
+        minInclusive: 0.155.2+26.2
+        maxInclusive: 0.155.2+26.2
       fabric-language-kotlin:
-        minInclusive: 1.13.12+kotlin.2.4.0
+        minInclusive: 1.13.13+kotlin.2.4.10
     lockedDependencies:
-      minecraft: 26.1.2
+      minecraft: 26.2
       fabric-loader: 0.19.3
-      fabric-api: 0.155.2+26.1.2
-      fabric-language-kotlin: 1.13.12+kotlin.2.4.0
+      fabric-api: 0.155.2+26.2
+      # 1.13.12 does not list 26.2; 1.13.13 bundles Kotlin 2.4.10, which is
+      # forward-compatible with the 2.4.0 we compile against
+      fabric-language-kotlin: 1.13.13+kotlin.2.4.10
 
   lucky-block-bedrock:
     version: 1.18.1-11.0
@@ -50,10 +53,10 @@ projects:
         maxInclusive: 1.17
 
   custom-lucky-block-java:
-    version: 26.1.2-3.0
+    version: 26.2-3.0
     dependencies:
       lucky-block:
         minInclusive: 1.0
       minecraft:
-        minInclusive: 26.1
-        maxExclusive: 26.2
+        minInclusive: 26.2
+        maxExclusive: 26.3
