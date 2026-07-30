@@ -1,6 +1,7 @@
 package mod.lucky.fabric
 
 import com.mojang.logging.LogUtils
+import com.mojang.serialization.Codec
 import com.mojang.serialization.MapCodec
 import mod.lucky.common.GAME_API
 import mod.lucky.common.LOGGER
@@ -25,9 +26,12 @@ import net.fabricmc.loader.api.metadata.*
 import net.fabricmc.loader.impl.metadata.ModOriginImpl
 import net.fabricmc.loader.impl.util.FileSystemUtil
 import net.minecraft.core.Registry
+import net.minecraft.core.component.DataComponentType
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
+import net.minecraft.network.codec.ByteBufCodecs
 import net.minecraft.resources.ResourceKey
+import net.minecraft.util.ExtraCodecs
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.MobCategory
 import net.minecraft.world.item.CreativeModeTabs
@@ -62,6 +66,9 @@ object FabricLuckyRegistry {
     lateinit var delayedDrop: EntityType<DelayedDrop>
     lateinit var luckModifierCraftingRecipe: RecipeSerializer<LuckModifierCraftingRecipe>
     lateinit var addonCraftingRecipe: RecipeSerializer<AddonCraftingRecipe>
+
+    lateinit var luckComponent: DataComponentType<Int>
+    lateinit var dropsComponent: DataComponentType<List<String>>
 
     val addonBlocks = HashMap<String, LuckyBlock>()
 }
@@ -123,6 +130,27 @@ class FabricMod : ModInitializer {
     override fun onInitialize() {
         FabricGameAPI.init()
         JavaLuckyRegistry.init()
+
+        // Data component types, matching the NeoForge registrations in ForgeMod.
+        // Without these, DataComponentMap.CODEC cannot round-trip lucky:luck and
+        // lucky:drops, which the mod relies on for tooltips, luck crafting and
+        // lucky block entity data.
+        FabricLuckyRegistry.luckComponent = Registry.register(
+            BuiltInRegistries.DATA_COMPONENT_TYPE,
+            id("lucky:luck"),
+            DataComponentType.Builder<Int>()
+                .persistent(ExtraCodecs.intRange(-100, 100))
+                .networkSynchronized(ByteBufCodecs.VAR_INT)
+                .build()
+        )
+        FabricLuckyRegistry.dropsComponent = Registry.register(
+            BuiltInRegistries.DATA_COMPONENT_TYPE,
+            id("lucky:drops"),
+            DataComponentType.Builder<List<String>>()
+                .persistent(Codec.STRING.listOf())
+                .networkSynchronized(ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()))
+                .build()
+        )
 
         // Blocks and items must be registered before anything that resolves them.
         Registry.register(BuiltInRegistries.BLOCK, id(JavaLuckyRegistry.blockId), FabricLuckyRegistry.luckyBlock)
