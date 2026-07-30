@@ -1,0 +1,64 @@
+name: Build (Fabric & NeoForge)
+
+on:
+  push:
+    branches:
+      - port/26.1
+      - master
+      - main
+  pull_request:
+    branches:
+      - port/26.1
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Minecraft 26.1 requires Java 25, and Fabric Loom requires the Gradle
+      # daemon itself to run on it (see gradle/gradle-daemon-jvm.properties).
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build
+        run: ./gradlew build --stacktrace
+
+      - name: Upload NeoForge jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: lucky-block-neoforge
+          path: neoforge/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload Fabric jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: lucky-block-fabric
+          path: fabric/build/libs/*.jar
+          if-no-files-found: error
+
+      # exportDist also produces packaged builds under dist/ with a meta.yaml
+      - name: Upload dist bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: lucky-block-dist
+          path: |
+            dist/**/*.jar
+            dist/**/*.zip
+            dist/**/meta.yaml
+          if-no-files-found: warn

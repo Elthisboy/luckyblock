@@ -1,45 +1,46 @@
 projects:
   lucky-block-neoforge:
-    version: 1.21.6-13.0
+    version: 26.1.2-14.0
     dependencies:
       java:
-        minInclusive: 21
-        maxInclusive: 21
+        minInclusive: 25
+        maxInclusive: 25
       minecraft:
-        minInclusive: 1.21.6
-        maxExclusive: 1.22.0
+        minInclusive: 26.1
+        maxExclusive: 26.2
       kotlinforforge:
-        minInclusive: 5.0.0
-        maxExclusive: 6
+        minInclusive: 6.3.0
+        maxExclusive: 7
       neoforge:
-        minInclusive: 21.1.6
-        maxExclusive: 22.0.0
+        minInclusive: 26.1.2
+        maxExclusive: 27.0.0
     lockedDependencies:
-      neoforge: 21.6.4-beta
-      kotlinforforge: 5.6.0
-      parchment-minecraft: 1.21.5
-      parchment-mappings: 2025.06.15
+      neoforge: 26.1.2.93
+      kotlinforforge: 6.3.0
 
   lucky-block-fabric:
-    version: 1.20.2-13.0
+    version: 26.1.2-14.0
     dependencies:
       java:
-        minInclusive: 17
-        maxInclusive: 17
+        minInclusive: 25
+        maxInclusive: 25
       minecraft:
-        minInclusive: 1.20.2
-        maxInclusive: 1.20.2
+        minInclusive: 26.1
+        maxExclusive: 26.2
       # latest: https://fabricmc.net/develop/
       fabric-loader:
-        minInclusive: 0.14.24
+        minInclusive: 0.19.3
         maxExclusive: 1.0
       fabric-api:
-        minInclusive: 0.90.4+1.20.2
-        maxInclusive: 0.90.4+1.20.2
-    devDependencies:
-      fabric-mappings:
-        minInclusive: 1.20.2+build.4
-        maxExclusive: 1.20.3
+        minInclusive: 0.155.2+26.1.2
+        maxInclusive: 0.155.2+26.1.2
+      fabric-language-kotlin:
+        minInclusive: 1.13.12+kotlin.2.4.0
+    lockedDependencies:
+      minecraft: 26.1.2
+      fabric-loader: 0.19.3
+      fabric-api: 0.155.2+26.1.2
+      fabric-language-kotlin: 1.13.12+kotlin.2.4.0
 
   lucky-block-bedrock:
     version: 1.18.1-11.0
@@ -49,10 +50,10 @@ projects:
         maxInclusive: 1.17
 
   custom-lucky-block-java:
-    version: 1.21.6-2.0
+    version: 26.1.2-3.0
     dependencies:
       lucky-block:
         minInclusive: 1.0
       minecraft:
-        minInclusive: 1.21.6
-        maxExclusive: 1.22
+        minInclusive: 26.1
+        maxExclusive: 26.2

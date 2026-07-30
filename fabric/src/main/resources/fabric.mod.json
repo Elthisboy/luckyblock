@@ -31,10 +31,9 @@
 
   "depends": {
     "fabricloader": ">=${minFabricLoaderVersion}",
-    "fabric": "*",
-    "minecraft": ">=${minMinecraftVersion}"
-  },
-  "suggests": {
-    "another-mod": "*"
+    "fabric-api": "*",
+    "fabric-language-kotlin": "*",
+    "minecraft": ">=${minMinecraftVersion}",
+    "java": ">=25"
   }
 }

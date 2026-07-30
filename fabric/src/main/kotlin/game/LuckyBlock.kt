@@ -1,24 +1,28 @@
 package mod.lucky.fabric.game
 
+import com.mojang.serialization.MapCodec
+
 import mod.lucky.common.LuckyRegistry
-import mod.lucky.fabric.isClientWorld
-import mod.lucky.fabric.toVec3i
 import mod.lucky.fabric.*
 import mod.lucky.java.JAVA_GAME_API
-import mod.lucky.java.game.*
+import mod.lucky.java.game.LuckyBlockEntityData
+import mod.lucky.java.game.onLuckyBlockBreak
+import mod.lucky.java.game.readFromTag
 import net.minecraft.core.BlockPos
-import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket
-import net.minecraft.world.InteractionHand
+import net.minecraft.core.registries.Registries
+import net.minecraft.resources.ResourceKey
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.block.BaseEntityBlock
+import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.RenderShape
 import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.material.MapColor
+import net.minecraft.world.level.redstone.Orientation
 import net.minecraft.world.phys.BlockHitResult
 
 private fun onBreak(
@@ -26,11 +30,13 @@ private fun onBreak(
     world: MCWorld,
     player: MCPlayerEntity?,
     pos: BlockPos,
+    blockEntity: BlockEntity? = null,
     removedByRedstone: Boolean = false,
 ) {
     if (isClientWorld(world)) return
 
-    val blockEntityData = (world.getBlockEntity(pos) as? LuckyBlockEntity?)?.data
+    val blockEntityWithDefault = blockEntity ?: world.getBlockEntity(pos)
+    val blockEntityData = (blockEntityWithDefault as? LuckyBlockEntity?)?.data
     world.removeBlock(pos, false)
     world.removeBlockEntity(pos)
 
@@ -44,20 +50,27 @@ private fun onBreak(
     )
 }
 
-class LuckyBlock : BaseEntityBlock(Properties.of()
+class LuckyBlock(registryId: MCIdentifier) : BaseEntityBlock(Properties.of()
+    .setId(ResourceKey.create(Registries.BLOCK, registryId))
     .mapColor(MapColor.COLOR_YELLOW)
     .sound(SoundType.STONE)
     .strength(0.2f, 6000000.0f)) {
+
+    // Registered once into BuiltInRegistries.BLOCK_TYPE by FabricMod; every
+    // LuckyBlock instance (including addon blocks) shares it.
+    override fun codec(): MapCodec<LuckyBlock> {
+        return FabricLuckyRegistry.luckyBlockCodec
+    }
 
     override fun neighborChanged(
         state: BlockState,
         world: MCWorld,
         pos: MCBlockPos,
-        neighborBlock: MCBlock,
-        neighborPos: MCBlockPos,
-        notify: Boolean
+        neighborBlock: Block,
+        orientation: Orientation?,
+        movedByPiston: Boolean
     ) {
-        super.neighborChanged(state, world, pos, neighborBlock, neighborPos, notify)
+        super.neighborChanged(state, world, pos, neighborBlock, orientation, movedByPiston)
         if (world.hasNeighborSignal(pos)) {
             onBreak(this, world, null, pos, removedByRedstone = true)
         }
@@ -72,15 +85,14 @@ class LuckyBlock : BaseEntityBlock(Properties.of()
         stack: MCItemStack
     ) {
         super.playerDestroy(world, player, pos, state, blockEntity, stack)
-        onBreak(this, world, player, pos)
+        onBreak(this, world, player, pos, blockEntity)
     }
 
-    override fun use(
+    override fun useWithoutItem(
         blockState: BlockState,
         world: Level,
         pos: BlockPos,
         player: Player,
-        hand: InteractionHand,
         hitResult: BlockHitResult
     ): InteractionResult {
         val settings = LuckyRegistry.blockSettings[JAVA_GAME_API.getBlockId(this)]!!
@@ -95,8 +107,9 @@ class LuckyBlock : BaseEntityBlock(Properties.of()
         super.setPlacedBy(world, pos, state, player, itemStack)
 
         val blockEntity = world.getBlockEntity(pos) as LuckyBlockEntity
-        itemStack.tag?.let {
-            blockEntity.data = LuckyBlockEntityData.readFromTag(it)
+        itemStack.components.let {
+            val nbt = componentsToNbt(itemStack.components, world.registryAccess())
+            blockEntity.data = LuckyBlockEntityData.readFromTag(nbt)
             blockEntity.setChanged()
         }
 
@@ -117,22 +130,13 @@ class LuckyBlock : BaseEntityBlock(Properties.of()
 class LuckyBlockEntity(
     blockPos: MCBlockPos,
     blockState: BlockState,
-    var data: LuckyBlockEntityData = LuckyBlockEntityData()
+    var data: LuckyBlockEntityData = LuckyBlockEntityData(),
 ) : BlockEntity(FabricLuckyRegistry.luckyBlockEntity, blockPos, blockState) {
-
-    override fun load(tag: CompoundTag) {
-        super.load(tag)
+    // Vanilla has no BlockEntity.onLoad (that is a NeoForge addition); setLevel is
+    // the equivalent hook that runs once the block entity joins a level.
+    override fun setLevel(level: Level) {
+        super.setLevel(level)
+        val tag = componentsToNbt(components(), level.registryAccess())
         data = LuckyBlockEntityData.readFromTag(tag)
-    }
-
-    override fun saveAdditional(tag: CompoundTag) {
-        super.saveAdditional(tag)
-        data.writeToTag(tag)
-    }
-
-    override fun getUpdatePacket(): ClientboundBlockEntityDataPacket {
-        return ClientboundBlockEntityDataPacket.create(this) { blockEntity ->
-            JAVA_GAME_API.attrToNBT((blockEntity as LuckyBlockEntity).data.toAttr()) as CompoundTag
-        }
     }
 }

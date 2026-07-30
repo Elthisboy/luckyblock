@@ -3,29 +3,36 @@ package mod.lucky.fabric.game
 import mod.lucky.fabric.*
 import mod.lucky.java.game.doSwordDrop
 import mod.lucky.java.JAVA_GAME_API
+import net.minecraft.core.component.DataComponents
+import net.minecraft.core.registries.Registries
+import net.minecraft.resources.ResourceKey
 import net.minecraft.world.entity.LivingEntity
-import net.minecraft.world.item.ItemStack
-import net.minecraft.world.item.SwordItem
-import net.minecraft.world.item.Tiers
+import net.minecraft.world.item.ToolMaterial
 import net.minecraft.world.item.TooltipFlag
+import net.minecraft.world.item.component.TooltipDisplay
+import java.util.function.Consumer
 
-class LuckySword : SwordItem(Tiers.IRON, 3, 2.4f, Properties().defaultDurability(3124)) {
-    override fun hurtEnemy(stack: MCItemStack, target: LivingEntity, attacker: LivingEntity): Boolean {
+class LuckySword(registryId: MCIdentifier) : MCItem(
+    Properties()
+        .setId(ResourceKey.create(Registries.ITEM, registryId))
+        .sword(ToolMaterial.IRON, 3.0F, -2.4F)
+        .component(DataComponents.MAX_DAMAGE, 3124)) {
+
+    override fun hurtEnemy(stack: MCItemStack, target: LivingEntity, attacker: LivingEntity) {
         if (!isClientWorld(attacker.level())) {
             doSwordDrop(
                 world = attacker.level(),
                 player = attacker,
                 hitEntity = target,
-                stackNBT = stack.tag,
+                stackNBT = componentsToNbt(stack.components, attacker.level().registryAccess()),
                 sourceId = JAVA_GAME_API.getItemId(this),
             )
         }
         return super.hurtEnemy(stack, target, attacker)
     }
 
-    override fun getUseDuration(itemStack: ItemStack): Int {
-        return 7200
-    }
+    // NeoForge's per-stack getMaxDamage override has no vanilla equivalent;
+    // durability comes from the MAX_DAMAGE component set in Properties above.
 
     @OnlyInClient
     override fun isFoil(stack: MCItemStack): Boolean {
@@ -33,7 +40,9 @@ class LuckySword : SwordItem(Tiers.IRON, 3, 2.4f, Properties().defaultDurability
     }
 
     @OnlyInClient
-    override fun appendHoverText(stack: MCItemStack, world: MCWorld?, tooltip: MutableList<MCChatComponent>, context: TooltipFlag) {
-        tooltip.addAll(createLuckyTooltip(stack))
+    override fun appendHoverText(stack: MCItemStack, context: TooltipContext, tooltipDisplay: TooltipDisplay, tooltipAdder: Consumer<MCChatComponent>, tooltipFlag: TooltipFlag) {
+        context.registries()?.let { access ->
+            createLuckyTooltip(stack, access).forEach { tooltipAdder.accept(it) }
+        }
     }
 }

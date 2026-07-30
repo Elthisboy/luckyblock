@@ -1,43 +1,37 @@
 package mod.lucky.fabric
 
 import com.mojang.brigadier.StringReader
-import com.mojang.brigadier.exceptions.CommandSyntaxException
 import mod.lucky.common.*
 import mod.lucky.common.Entity
-import mod.lucky.common.World
 import mod.lucky.common.attribute.*
 import mod.lucky.common.drop.DropContext
 import mod.lucky.common.drop.SingleDrop
 import mod.lucky.common.drop.action.withBlockMode
 import mod.lucky.fabric.game.DelayedDrop
+import mod.lucky.fabric.game.LuckySword
 import mod.lucky.java.*
-import mod.lucky.java.game.DelayedDropData
-import mod.lucky.java.game.spawnEggSuffix
-import mod.lucky.java.game.uselessPostionNames
-import mod.lucky.java.game.usefulStatusEffectIds
+import mod.lucky.java.game.*
 import net.minecraft.commands.CommandSource
 import net.minecraft.commands.CommandSourceStack
+import net.minecraft.commands.arguments.ParticleArgument
 import net.minecraft.commands.arguments.selector.EntitySelectorParser
-import net.minecraft.core.BlockPos
-import net.minecraft.core.particles.ParticleOptions
-import net.minecraft.core.particles.ParticleType
-import net.minecraft.core.registries.Registries
 import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.core.registries.Registries
 import net.minecraft.nbt.NbtUtils
-import net.minecraft.resources.ResourceLocation
+import net.minecraft.server.permissions.PermissionSet
 import net.minecraft.sounds.SoundSource
+import net.minecraft.util.Mth
+import net.minecraft.util.ProblemReporter.ScopedCollector
 import net.minecraft.util.RandomSource
 import net.minecraft.world.*
 import net.minecraft.world.effect.MobEffectCategory
 import net.minecraft.world.effect.MobEffectInstance
-import net.minecraft.world.entity.EntityType
-import net.minecraft.world.entity.LivingEntity
-import net.minecraft.world.entity.Mob
-import net.minecraft.world.entity.MobSpawnType
+import net.minecraft.world.entity.*
 import net.minecraft.world.entity.item.FallingBlockEntity
-import net.minecraft.world.entity.projectile.Arrow
+import net.minecraft.world.entity.projectile.arrow.Arrow
+import net.minecraft.world.item.BowItem
 import net.minecraft.world.item.DyeColor
-import net.minecraft.world.item.alchemy.PotionUtils
+import net.minecraft.world.item.alchemy.PotionContents
 import net.minecraft.world.level.Level.ExplosionInteraction
 import net.minecraft.world.level.LevelReader
 import net.minecraft.world.level.block.Rotation
@@ -45,11 +39,12 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlac
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureProcessor
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureProcessorType
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
+import net.minecraft.world.level.storage.TagValueInput
 import java.awt.Color
-import kotlin.jvm.optionals.getOrDefault
 import kotlin.jvm.optionals.getOrNull
 
-typealias MCIdentifier = net.minecraft.resources.ResourceLocation
+typealias MCIdentifier = net.minecraft.resources.Identifier
+typealias MCEnchantment = net.minecraft.world.item.enchantment.Enchantment
 typealias MCBlock = net.minecraft.world.level.block.Block
 typealias MCItem = net.minecraft.world.item.Item
 typealias MCIWorld = net.minecraft.world.level.LevelAccessor
@@ -65,7 +60,7 @@ typealias MCBlockPos = net.minecraft.core.BlockPos
 typealias MCBox = net.minecraft.world.phys.AABB
 typealias MCItemStack = net.minecraft.world.item.ItemStack
 
-typealias MCEnchantmentType = net.minecraft.world.item.enchantment.EnchantmentCategory
+typealias MCEnchantmentType = net.minecraft.world.item.enchantment.Enchantments
 typealias MCStatusEffect = net.minecraft.world.effect.MobEffect
 
 typealias MCChatComponent = net.minecraft.network.chat.Component
@@ -94,25 +89,6 @@ fun toServerWorld(world: World): MCServerWorld {
     return (world as MCServerWorld).level
 }
 
-private fun toEnchantmentType(mcType: MCEnchantmentType): EnchantmentType {
-    return when (mcType) {
-        MCEnchantmentType.ARMOR -> EnchantmentType.ARMOR
-        MCEnchantmentType.ARMOR_FEET -> EnchantmentType.ARMOR_FEET
-        MCEnchantmentType.ARMOR_LEGS -> EnchantmentType.ARMOR_LEGS
-        MCEnchantmentType.ARMOR_CHEST -> EnchantmentType.ARMOR_CHEST
-        MCEnchantmentType.ARMOR_HEAD -> EnchantmentType.ARMOR_HEAD
-        MCEnchantmentType.WEAPON -> EnchantmentType.WEAPON
-        MCEnchantmentType.DIGGER -> EnchantmentType.DIGGER
-        MCEnchantmentType.FISHING_ROD -> EnchantmentType.FISHING_ROD
-        MCEnchantmentType.TRIDENT -> EnchantmentType.TRIDENT
-        MCEnchantmentType.BREAKABLE -> EnchantmentType.BOW
-        MCEnchantmentType.BOW -> EnchantmentType.BOW
-        MCEnchantmentType.WEARABLE -> EnchantmentType.WEARABLE
-        MCEnchantmentType.CROSSBOW -> EnchantmentType.CROSSBOW
-        MCEnchantmentType.VANISHABLE -> EnchantmentType.VANISHABLE
-    }
-}
-
 private fun createCommandSource(
     world: MCServerWorld,
     pos: Vec3d,
@@ -131,7 +107,7 @@ private fun createCommandSource(
         toMCVec3d(pos),
         MCVec2f.ZERO, // (pitch, yaw)
         world,
-        2,  // permission level
+        PermissionSet.ALL_PERMISSIONS,
         senderName, MCChatComponent.literal(senderName),
         world.server,
         null, // entity
@@ -141,44 +117,34 @@ private fun createCommandSource(
 object FabricGameAPI : GameAPI {
     private var usefulPotionIds: List<String> = emptyList()
     private var spawnEggIds: List<String> = emptyList()
-    private var enchantments: List<Enchantment> = emptyList()
+    private var enchantments: List<Enchantment> = ENCHANTMENTS
     private var usefulStatusEffects: List<StatusEffect> = emptyList()
 
     fun init() {
-        usefulPotionIds = BuiltInRegistries.POTION.keySet().filter {
+        usefulPotionIds = BuiltInRegistries.POTION.keySet().stream().filter {
             it.namespace == "minecraft" && it.path !in uselessPostionNames
         }.map { it.toString() }.toList()
 
-        spawnEggIds = BuiltInRegistries.ITEM.keySet().filter {
+        spawnEggIds = BuiltInRegistries.ITEM.keySet().stream().filter {
             it.namespace == "minecraft"
                 && it.path.endsWith(spawnEggSuffix)
         }.map { it.toString() }.toList()
 
         usefulStatusEffects = usefulStatusEffectIds.map {
-            val mcId = MCIdentifier(it)
-            val mcStatusEffect = BuiltInRegistries.MOB_EFFECT.get(mcId)!!
+            val mcId = MCIdentifier.parse(it)
+            val mcStatusEffect = BuiltInRegistries.MOB_EFFECT.getOptional(mcId).get()
             StatusEffect(
                 id = mcId.toString(),
                 isNegative = mcStatusEffect.category == MobEffectCategory.HARMFUL,
                 isInstant = mcStatusEffect.isInstantenous,
             )
         }
-
-        enchantments = BuiltInRegistries.ENCHANTMENT.entrySet().map {
-            Enchantment(
-                it.key.location().toString(),
-                type = toEnchantmentType(it.value.category),
-                maxLevel = it.value.maxLevel,
-                isCurse = it.value.isCurse,
-            )
-        }
     }
-
 
     override fun logError(msg: String?, error: Exception?) {
         if (msg != null && error != null) FabricLuckyRegistry.LOGGER.error(msg, error)
         else if (msg != null) FabricLuckyRegistry.LOGGER.error(msg)
-        else FabricLuckyRegistry.LOGGER.error(error)
+        else FabricLuckyRegistry.LOGGER.error(error.toString())
     }
 
     override fun logInfo(msg: String) {
@@ -191,9 +157,8 @@ object FabricGameAPI : GameAPI {
     override fun getUsefulStatusEffects(): List<StatusEffect> = usefulStatusEffects
 
     override fun getRGBPalette(): List<Int> {
-        return DyeColor.values().toList().map {
-            val c = it.textureDiffuseColors
-            Color(c[0], c[1], c[2]).rgb
+        return DyeColor.values().map {
+            Color(it.textureDiffuseColor).rgb
         }
     }
 
@@ -206,13 +171,14 @@ object FabricGameAPI : GameAPI {
     }
 
     override fun applyStatusEffect(target: String?, targetEntity: Entity?, effectId: String, durationSeconds: Double, amplifier: Int) {
-        val statusEffect = BuiltInRegistries.MOB_EFFECT.get(MCIdentifier(effectId))
-        if (statusEffect == null) {
+        val statusEffectHolder = BuiltInRegistries.MOB_EFFECT.get(MCIdentifier.parse(effectId)).getOrNull()
+        if (statusEffectHolder === null) {
             GAME_API.logError("Unknown status effect: $effectId")
             return
         }
+        val statusEffect = statusEffectHolder.value()
         val duration = if (statusEffect.isInstantenous) 1 else (durationSeconds * 20.0).toInt()
-        if (targetEntity is LivingEntity) targetEntity.addEffect(MobEffectInstance(statusEffect, duration, amplifier))
+        if (targetEntity is LivingEntity) targetEntity.addEffect(MobEffectInstance(statusEffectHolder, duration, amplifier))
     }
 
     override fun getLivingEntitiesInBox(world: World, boxMin: Vec3d, boxMax: Vec3d): List<Entity> {
@@ -221,17 +187,17 @@ object FabricGameAPI : GameAPI {
     }
 
     override fun setEntityOnFire(entity: Entity, durationSeconds: Int) {
-        (entity as MCEntity).setSecondsOnFire(durationSeconds)
+        (entity as MCEntity).igniteForSeconds(durationSeconds.toFloat())
     }
 
     override fun setEntityMotion(entity: Entity, motion: Vec3d) {
         (entity as MCEntity).deltaMovement = toMCVec3d(motion)
         entity.hurtMarked = true
-        entity.hasImpulse = true
     }
 
+    // 26.1 replaced the level's raw dayTime with the WorldClock / ClockManager system.
     override fun getWorldTime(world: World): Long {
-        return toServerWorld(world).dayTime
+        return toServerWorld(world).defaultClockTime
     }
 
     override fun getPlayerHeadYawDeg(player: PlayerEntity): Double {
@@ -251,18 +217,28 @@ object FabricGameAPI : GameAPI {
             nbt.with(mapOf("sourceId" to stringAttrOf(sourceId))) else nbt
 
         val mcEntityNBT = JAVA_GAME_API.attrToNBT(nbt.with(mapOf("id" to stringAttrOf(id)))) as CompoundTag
+        val sourceItem = BuiltInRegistries.ITEM.getOptional(MCIdentifier.parse(sourceId))
 
         val serverWorld = toServerWorld(world)
-        val entity = EntityType.loadEntityRecursive(mcEntityNBT, serverWorld) { entity ->
+        val entity = EntityType.loadEntityRecursive(mcEntityNBT, serverWorld, EntitySpawnReason.EVENT) { entity ->
             val entityRotation = positiveMod(rotation + 2.0, 4.0) // entities face south by default
             val rotationDeg = (entityRotation * 90.0)
             val yaw = positiveMod(entity.yRot + entityRotation, 360.0)
             val velocity = if (entityRotation == 0.0) entity.deltaMovement
             else toMCVec3d(rotateVec3d(toVec3d(entity.deltaMovement), degToRad(rotationDeg)))
 
-            entity.absMoveTo(pos.x, pos.y, pos.z, yaw.toFloat(), entity.xRot)
+            entity.absSnapTo(pos.x, pos.y, pos.z, yaw.toFloat(), entity.xRot)
             entity.yHeadRot = yaw.toFloat()
             entity.deltaMovement = velocity
+
+            if (sourceItem.isPresent && (sourceItem.get() is BowItem || sourceItem.get() is LuckySword)) {
+                val d0 = velocity.horizontalDistance()
+                entity.yRot = ((Mth.atan2(velocity.x, velocity.z) * 180.0 / Math.PI.toFloat().toDouble()).toFloat())
+                entity.xRot = ((Mth.atan2(velocity.y, d0) * 180.0 / Math.PI.toFloat().toDouble()).toFloat())
+                entity.yRotO = entity.yRot
+                entity.xRotO = entity.xRot
+            }
+
             if (serverWorld.addFreshEntity(entity)) entity else null
         } ?: return
 
@@ -273,21 +249,25 @@ object FabricGameAPI : GameAPI {
             entity.finalizeSpawn(
                 serverWorld,
                 serverWorld.getCurrentDifficultyAt(toMCBlockPos(pos.floor())),
-                MobSpawnType.EVENT,
-                null, null
+                EntitySpawnReason.EVENT,
+                null
             )
-            entity.readAdditionalSaveData(mcEntityNBT)
         }
     }
 
     override fun getNearestPlayer(world: World, pos: Vec3d): PlayerEntity? {
         val commandSource = createCommandSource(world as MCServerWorld, pos, showOutput = false)
-        return EntitySelectorParser(StringReader("@p")).parse().findSinglePlayer(commandSource)
+        return EntitySelectorParser(StringReader("@p"), true).parse().findSinglePlayer(commandSource)
     }
 
     override fun scheduleDrop(drop: SingleDrop, context: DropContext, seconds: Double) {
         val world = toServerWorld(context.world)
-        val delayedDrop = DelayedDrop(world = world, data = DelayedDropData(drop, context, (seconds * 20).toInt()))
+        val delayedDrop = DelayedDrop(world = world, data = DelayedDropData(
+            singleDrop = drop,
+            singleDropString = drop.propsString,
+            context = context,
+            ticksRemaining = (seconds * 20).toInt())
+        )
         delayedDrop.setPos(context.pos.x, context.pos.y, context.pos.z)
         world.addFreshEntity(delayedDrop)
     }
@@ -300,6 +280,8 @@ object FabricGameAPI : GameAPI {
 
         val mcBlockState = NbtUtils
             .readBlockState((world as MCIWorld).holderLookup(Registries.BLOCK), blockStateNBT)
+            // vanilla only has the single-argument rotate; the (world, pos, rotation)
+            // overload is a NeoForge extension
             .rotate(Rotation.values()[rotation])
 
         world.setBlock(toMCBlockPos(pos), mcBlockState, if (notify) 3 else 2)
@@ -314,20 +296,31 @@ object FabricGameAPI : GameAPI {
                 "y" to intAttrOf(pos.y),
                 "z" to intAttrOf(pos.z),
             ))
-            blockEntity.load(JAVA_GAME_API.attrToNBT(fullNBT) as CompoundTag)
+            val tag = JAVA_GAME_API.attrToNBT(fullNBT) as CompoundTag
+            ScopedCollector(FabricLuckyRegistry.LOGGER).use {
+                val input = TagValueInput.create(it, world.registryAccess(), tag)
+                blockEntity.loadWithComponents(input)
+            }
             blockEntity.setChanged()
         }
     }
 
     override fun dropItem(world: World, pos: Vec3d, id: String, nbt: DictAttr?, components: DictAttr?) {
-        val item = BuiltInRegistries.ITEM.getOptional(MCIdentifier(id)).orElse(null)
-        if (item == null) {
+        val itemKey = MCIdentifier.parse(id)
+        if (!BuiltInRegistries.ITEM.containsKey(itemKey)) {
             GAME_API.logError("Invalid item ID: '$id'")
             return
         }
 
-        val itemStack = MCItemStack(item, 1)
-        if (nbt != null) itemStack.tag = JAVA_GAME_API.attrToNBT(nbt) as CompoundTag
+        val item = BuiltInRegistries.ITEM.getOptional(itemKey).get()
+        var itemStack = MCItemStack(item, 1)
+        val componentsAttr = nbt ?: components
+        if (componentsAttr != null) {
+            val tag = JAVA_GAME_API.attrToNBT(componentsAttr) as CompoundTag
+            val parsedComponents = nbtToComponents(tag, (world as MCWorld).registryAccess())
+            itemStack.applyComponents(parsedComponents)
+        }
+
         MCBlock.popResource(toServerWorld(world), toMCBlockPos(pos.floor()), itemStack)
     }
 
@@ -343,7 +336,7 @@ object FabricGameAPI : GameAPI {
     }
 
     override fun sendMessage(player: PlayerEntity, message: String) {
-        (player as MCPlayerEntity).displayClientMessage(MCChatComponent.literal(message), false)
+        (player as MCPlayerEntity).sendSystemMessage(MCChatComponent.literal(message))
     }
 
     override fun setDifficulty(world: World, difficulty: String) {
@@ -357,11 +350,14 @@ object FabricGameAPI : GameAPI {
     }
 
     override fun setTime(world: World, time: Long) {
-        toServerWorld(world).dayTime = time
+        val serverWorld = toServerWorld(world)
+        serverWorld.dimensionType().defaultClock().ifPresent { clock ->
+            serverWorld.clockManager().setTotalTicks(clock, time)
+        }
     }
 
     override fun playSound(world: World, pos: Vec3d, id: String, volume: Double, pitch: Double) {
-        val soundEvent = BuiltInRegistries.SOUND_EVENT.getOptional(MCIdentifier(id)).orElse(null)
+        val soundEvent = BuiltInRegistries.SOUND_EVENT.getOptional(MCIdentifier.parse(id)).getOrNull()
         if (soundEvent == null) {
             GAME_API.logError("Invalid sound event: $id")
             return
@@ -376,20 +372,11 @@ object FabricGameAPI : GameAPI {
     }
 
     override fun spawnParticle(world: World, pos: Vec3d, id: String, args: List<String>, boxSize: Vec3d, amount: Int) {
-        @Suppress("UNCHECKED_CAST")
-        val particleType = BuiltInRegistries.PARTICLE_TYPE.get(MCIdentifier(id)) as ParticleType<ParticleOptions>?
-        if (particleType == null) {
-            GAME_API.logError("Invalid partical: $id")
-            return
-        }
-
         try {
-            val particleData = try {
-                particleType.deserializer.fromCommand(particleType, StringReader(" " + args.joinToString(" ")))
-            } catch (e: CommandSyntaxException) {
-                GAME_API.logError("Error processing partice '$id' with arguments '$args'", e)
-                return
-            }
+            val particleData = ParticleArgument.readParticle(
+                StringReader(id + " " + args.joinToString(" ")),
+                (world as MCWorld).registryAccess()
+            )
             toServerWorld(world).sendParticles(
                 particleData,
                 pos.x, pos.y, pos.z,
@@ -398,7 +385,7 @@ object FabricGameAPI : GameAPI {
                 0.0 // spread
             )
         } catch (e: Exception) {
-            GAME_API.logError("Invalid partical arguments: $args", e)
+            GAME_API.logError("Error processing particle '$id' with arguments '$args'", e)
             return
         }
     }
@@ -409,13 +396,13 @@ object FabricGameAPI : GameAPI {
 
     override fun playSplashPotionEvent(world: World, pos: Vec3d, potionName: String?, potionColor: Int?) {
         if (potionName != null) {
-            val potion = BuiltInRegistries.POTION.getOptional(MCIdentifier(potionName)).orElse(null)
+            val potion = BuiltInRegistries.POTION.getOptional(MCIdentifier.parse(potionName)).getOrNull()
             if (potion == null) {
                 GAME_API.logError("Invalid splash potion name: $potionName")
                 return
             }
 
-            val color = PotionUtils.getColor(potion.effects)
+            val color = PotionContents.getColorOptional(potion.effects).asInt
             playParticleEvent(world, pos, if (potion.hasInstantEffects()) 2007 else 2002, color)
         } else if (potionColor != null) {
             playParticleEvent(world, pos, 2002, potionColor)
@@ -434,6 +421,8 @@ object FabricGameAPI : GameAPI {
         }
 
         val processor = object : StructureProcessor() {
+            // vanilla name/signature; NeoForge renames this to `process` and adds a
+            // trailing StructureTemplate parameter
             override fun processBlock(
                 world: LevelReader,
                 oldPos: MCBlockPos,
@@ -448,10 +437,10 @@ object FabricGameAPI : GameAPI {
                 if (blockIdWithMode == blockId) return newBlockInfo
 
                 val newState = if (blockIdWithMode == null) world.getBlockState(newBlockInfo.pos)
-                else BuiltInRegistries.BLOCK.get(MCIdentifier(blockIdWithMode)).defaultBlockState()
+                    else BuiltInRegistries.BLOCK.getOptional(MCIdentifier.parse(blockIdWithMode)).getOrNull()?.defaultBlockState()!!
 
-                return if (newState == newBlockInfo.state) newBlockInfo
-                else StructureTemplate.StructureBlockInfo(newBlockInfo.pos, newState, newBlockInfo.nbt)
+                return if (newState.equals(newBlockInfo.state)) newBlockInfo
+                    else StructureTemplate.StructureBlockInfo(newBlockInfo.pos, newState, newBlockInfo.nbt)
             }
 
             override fun getType(): StructureProcessorType<*> {

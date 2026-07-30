@@ -3,13 +3,11 @@ package mod.lucky.fabric
 import mod.lucky.fabric.game.*
 import net.fabricmc.fabric.api.datagen.v1.DataGeneratorEntrypoint
 import net.fabricmc.fabric.api.datagen.v1.FabricDataGenerator
-import net.fabricmc.fabric.api.datagen.v1.FabricDataOutput
+import net.fabricmc.fabric.api.datagen.v1.FabricPackOutput
 import net.fabricmc.fabric.api.datagen.v1.provider.FabricDynamicRegistryProvider
 import net.minecraft.core.Holder
 import net.minecraft.core.HolderLookup
-import net.minecraft.core.Registry
 import net.minecraft.core.RegistrySetBuilder
-import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
 import net.minecraft.resources.ResourceKey
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature
@@ -18,7 +16,7 @@ import net.minecraft.world.level.levelgen.placement.PlacedFeature
 import java.util.concurrent.CompletableFuture
 
 
-class WorldGenerator(output: FabricDataOutput?, registriesFuture: CompletableFuture<HolderLookup.Provider>) :
+class WorldGenerator(output: FabricPackOutput, registriesFuture: CompletableFuture<HolderLookup.Provider>) :
     FabricDynamicRegistryProvider(output, registriesFuture) {
     override fun configure(registries: HolderLookup.Provider, entries: Entries) {
         entries.addAll(registries.lookupOrThrow(Registries.CONFIGURED_FEATURE))
@@ -37,12 +35,10 @@ class FabricModDataGen : DataGeneratorEntrypoint {
     }
 
     override fun buildRegistry(registryBuilder: RegistrySetBuilder) {
-        val featureId = MCIdentifier(FabricLuckyRegistry.luckyWorldFeatureId)
+        val featureId = MCIdentifier.parse(FabricLuckyRegistry.luckyWorldFeatureId)
         val feature = LuckyWorldFeature(NoneFeatureConfiguration.CODEC)
-        val configuredFeature = ConfiguredFeature(feature, NoneFeatureConfiguration());
+        val configuredFeature = ConfiguredFeature(feature, NoneFeatureConfiguration())
         val placedFeature = PlacedFeature(Holder.direct(configuredFeature), emptyList())
-
-        Registry.register(BuiltInRegistries.FEATURE, featureId, feature)
 
         registryBuilder.add(Registries.CONFIGURED_FEATURE) { registry ->
             val configuredKey = ResourceKey.create(Registries.CONFIGURED_FEATURE, featureId)

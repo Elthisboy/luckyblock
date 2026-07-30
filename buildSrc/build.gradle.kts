@@ -1,6 +1,7 @@
 plugins {
     `kotlin-dsl`
-    kotlin("plugin.serialization") version "1.9.0"
+    // Must track the Kotlin version embedded in the Gradle distribution (9.6.1 -> 2.3.21)
+    kotlin("plugin.serialization") version "2.3.21"
 }
 
 repositories {
@@ -9,6 +10,6 @@ repositories {
 }
 
 dependencies {
-    implementation("org.ajoberstar.grgit:grgit-core:4.1.1")
-    implementation("com.charleskorn.kaml:kaml:0.37.0")
+    implementation("org.ajoberstar.grgit:grgit-core:5.3.3")
+    implementation("com.charleskorn.kaml:kaml:0.104.0")
 }

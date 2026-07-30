@@ -127,13 +127,13 @@ object ForgeLuckyRegistry {
 
     val luckModifierCraftingRecipe = recipeRegistry.register(
         "crafting_luck",
-        { _ -> CustomRecipe.Serializer(::LuckModifierCraftingRecipe) }
+        { _ -> LuckModifierCraftingRecipe.SERIALIZER }
     )
 
     val luckComponent = dataComponentTypeRegistry.register(
         "luck",
         { id ->
-            DataComponentType.Builder<Int?>()
+            DataComponentType.Builder<Int>()
                 .persistent(ExtraCodecs.intRange(-100, 100))
                 .networkSynchronized(ByteBufCodecs.VAR_INT)
                 .build()
@@ -219,7 +219,7 @@ class CommonModEvents {
 @Mod("lucky")
 class ForgeMod(modEventBus: IEventBus, modContainer: ModContainer) {
     companion object {
-        @EventBusSubscriber(modid = "lucky", bus = EventBusSubscriber.Bus.MOD, value = [Dist.CLIENT])
+        @EventBusSubscriber(modid = "lucky", value = [Dist.CLIENT])
         object ClientModEvents {
             @SubscribeEvent
             private fun registerEntityRenderers(event: RegisterRenderers) {
@@ -252,7 +252,10 @@ class ForgeMod(modEventBus: IEventBus, modContainer: ModContainer) {
                                 true,
                             )
                         )
-                        packConsumer.accept(packWithMeta)
+                        // 26.1: readMetaAndCreate returns null if the pack metadata
+                        // can't be read, instead of throwing.
+                        if (packWithMeta != null) packConsumer.accept(packWithMeta)
+                        else GAME_API.logError("Failed to read resource pack metadata for $packName")
                     }
                     event.addRepositorySource(repositorySource)
                 }

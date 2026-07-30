@@ -65,7 +65,8 @@ class LuckyBow(registryId: MCIdentifier) : BowItem(
         return false;
     }
 
-    override fun getEnchantmentLevel(stack: ItemStack, enchantment: Holder<Enchantment>): Int {
+    // 26.1 widened this from ItemStack to the new ItemInstance interface
+    override fun getEnchantmentLevel(stack: ItemInstance, enchantment: Holder<Enchantment>): Int {
         return 0;
     }
 

@@ -1,4 +1,4 @@
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import mod.lucky.build.*
 
 val rootProjectProps = RootProjectProperties.fromProjectYaml(rootProject.rootDir)
@@ -13,8 +13,7 @@ buildscript {
 plugins {
     kotlin("jvm")
     id("mod.lucky.build.JavaEditionTasks")
-    id("net.neoforged.moddev") version "1.0.21"
-    //id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
+    id("net.neoforged.moddev") version "2.0.143"
 }
 
 dependencies {
@@ -38,10 +37,8 @@ version = projectProps.version
 neoForge {
     version = projectProps.lockedDependencies["neoforge"]!!
 
-    parchment {
-        minecraftVersion = projectProps.lockedDependencies["parchment-minecraft"]!!
-        mappingsVersion = projectProps.lockedDependencies["parchment-mappings"]!!
-    }
+    // Parchment has no mappings published for 26.x yet, so we build against
+    // NeoForge's official (Mojang) names only.
 
     runs {
         create("client") {
@@ -75,9 +72,9 @@ tasks.named<ProcessResources>("processResources").configure {
     filesMatching("META-INF/neoforge.mods.toml") {
         expand(
             "modVersion" to projectProps.version,
-            "minMinecraftVersion" to projectProps.dependencies["minecraft"]!!.minInclusive,
-            "minNeoforgeVersion" to projectProps.dependencies["neoforge"]!!.minInclusive,
-            "minLoaderVersion" to projectProps.dependencies["kotlinforforge"]!!.minInclusive,
+            "minMinecraftVersion" to projectProps.dependencies["minecraft"]!!.minInclusive!!,
+            "minNeoforgeVersion" to projectProps.dependencies["neoforge"]!!.minInclusive!!,
+            "minLoaderVersion" to projectProps.dependencies["kotlinforforge"]!!.minInclusive!!,
         )
     }
     dependsOn(tasks.getByName("copyRuntimeResources"))
@@ -95,17 +92,15 @@ tasks.assemble {
 val javaVersion = projectProps.dependencies["java"]!!.maxInclusive!!
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(javaVersion.toInt()))
 
-val compileKotlin: KotlinCompile by tasks
-compileKotlin.kotlinOptions.jvmTarget = javaVersion
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.fromTarget(javaVersion))
+    }
+}
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(javaVersion.toInt())
-}
-
-dependencyLocking {
-    lockAllConfigurations()
-    lockMode.set(LockMode.LENIENT)
 }
 
 // Activate reproducible builds

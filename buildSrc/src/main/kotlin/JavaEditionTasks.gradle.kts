@@ -10,6 +10,11 @@ val projectName = when(project.name) {
 val projectProps = rootProjectProps.projects[projectName]!!
 
 tasks.register<Copy>("copyRuntimeResources") {
+    // The destination is the dev run directory, which also holds saves and logs.
+    // Gradle 9 fingerprints the whole destination and fails on locked files such
+    // as saves/<world>/session.lock, so opt out of state tracking here.
+    doNotTrackState("copies into the dev run directory, which contains live game files")
+
     if (projectName == ProjectName.LUCKY_BLOCK_FABRIC) {
         into("$rootDir/fabric/run")
     } else {
@@ -24,9 +29,12 @@ tasks.register<Copy>("copyRuntimeResources") {
     }
 }
 
+// Written into this project's own build dir: with both :fabric and :neoforge
+// enabled, a shared output under common/build would make each project silently
+// consume the other's zip (Gradle 9 rejects the implicit dependency outright).
 tasks.register<Zip>("luckyBlockConfigDist") {
     archiveFileName.set("lucky-config.zip")
-    destinationDirectory.set(file("$rootDir/common/build/tmp"))
+    destinationDirectory.set(layout.buildDirectory.dir("tmp"))
     from("$rootDir/common/src/main/resources/lucky-config")
 }
 
@@ -41,11 +49,13 @@ tasks.register<Zip>("exportDist") {
         file(distDir).mkdirs()
         file("$distDir/meta.yaml").writeText(distMeta.toYaml())
     }
+    val configDist = tasks.named<Zip>("luckyBlockConfigDist")
+
     from(zipTree("./build/libs/${rootProject.name}-${projectProps.version}.jar"))
-    from("$rootDir/common/build/tmp/lucky-config.zip") { into("mod/lucky/java") }
+    from(configDist.map { it.archiveFile }) { into("mod/lucky/java") }
     from("$rootDir/dist/$distName/meta.yaml")
 
-    dependsOn(tasks.getByName("luckyBlockConfigDist"))
+    dependsOn(configDist)
     dependsOn(tasks.getByName("jar"))
 }
 

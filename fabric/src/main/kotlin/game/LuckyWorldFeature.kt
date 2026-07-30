@@ -45,7 +45,7 @@ class LuckyWorldFeature(
                     world = world,
                     surfacePos = Vec3i(topPos.x, surfaceY, topPos.z),
                     blockId = blockId,
-                    dimensionKey = world.level.dimension().location().toString(),
+                    dimensionKey = world.level.dimension().identifier().toString(),
                     random = MinecraftRandom(random),
                 )
             }

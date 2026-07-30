@@ -1,26 +1,35 @@
 package mod.lucky.fabric.game
 
-import mod.lucky.fabric.*
-import mod.lucky.java.*
-import mod.lucky.java.game.*
 import com.mojang.blaze3d.vertex.PoseStack
-import mod.lucky.java.*
-import mod.lucky.java.game.*
-import net.minecraft.client.renderer.MultiBufferSource
+import com.mojang.serialization.Codec
+import mod.lucky.common.GAME_API
+import mod.lucky.common.drop.dropsFromStrList
+import mod.lucky.fabric.*
+import mod.lucky.java.JavaLuckyRegistry
+import mod.lucky.java.game.LuckyProjectileData
+import mod.lucky.java.game.onImpact
+import mod.lucky.java.game.tick
+import mod.lucky.java.game.writeToTag
+import net.minecraft.client.renderer.SubmitNodeCollector
 import net.minecraft.client.renderer.entity.EntityRenderer
 import net.minecraft.client.renderer.entity.EntityRendererProvider
-import net.minecraft.network.protocol.Packet
-import net.minecraft.network.protocol.game.ClientGamePacketListener
-import net.minecraft.network.protocol.game.ClientboundAddEntityPacket
+import net.minecraft.client.renderer.entity.state.EntityRenderState
+import net.minecraft.client.renderer.entity.state.ItemEntityRenderState
+import net.minecraft.client.renderer.state.level.CameraRenderState
+import net.minecraft.core.component.DataComponentMap
+import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.network.syncher.EntityDataAccessor
 import net.minecraft.network.syncher.EntityDataSerializers
 import net.minecraft.network.syncher.SynchedEntityData
 import net.minecraft.world.entity.EntityType
-import net.minecraft.world.entity.item.ItemEntity
-import net.minecraft.world.entity.projectile.Arrow
+import net.minecraft.world.entity.projectile.arrow.Arrow
 import net.minecraft.world.item.Items
+import net.minecraft.world.level.storage.ValueInput
+import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.EntityHitResult
 import net.minecraft.world.phys.HitResult
+import kotlin.jvm.optionals.getOrDefault
+import kotlin.jvm.optionals.getOrNull
 
 private val defaultDisplayItemStack = MCItemStack(Items.STICK)
 
@@ -29,37 +38,25 @@ class LuckyProjectile(
     world: MCWorld,
     private var data: LuckyProjectileData = LuckyProjectileData(),
 ) : Arrow(type, world) {
-    var itemEntity: ItemEntity? = null
-
     companion object {
-        private val ITEM_STACK: EntityDataAccessor<MCItemStack> = SynchedEntityData.defineId(
+        val ITEM_STACK: EntityDataAccessor<MCItemStack> = SynchedEntityData.defineId(
             LuckyProjectile::class.java, EntityDataSerializers.ITEM_STACK
         )
     }
 
-    override fun defineSynchedData() {
-        super.defineSynchedData()
-        this.entityData.define(ITEM_STACK, MCItemStack.EMPTY)
+    override fun defineSynchedData(p0: SynchedEntityData.Builder) {
+        super.defineSynchedData(p0)
+        p0.define(ITEM_STACK, MCItemStack.EMPTY)
     }
 
     override fun tick() {
         super.tick()
-
-        if (this.itemEntity === null) {
-            this.itemEntity = ItemEntity(
-                this.level(),
-                x, y, z,
-                entityData.get(ITEM_STACK)
-            )
-        }
-        itemEntity?.tick()
-
         if (!isClientWorld(level())) data.tick(level(), this, owner, tickCount)
     }
 
     override fun onHit(hitResult: HitResult) {
         super.onHit(hitResult)
-        if (hitResult.type != HitResult.Type.MISS){
+        if (hitResult.type != HitResult.Type.MISS) {
             if (!isClientWorld(level())) {
                 val hitEntity: MCEntity? = (hitResult as? EntityHitResult)?.entity
                 data.onImpact(level(), this, owner, hitEntity)
@@ -68,48 +65,94 @@ class LuckyProjectile(
         }
     }
 
-    override fun readAdditionalSaveData(tag: CompoundTag) {
+    override fun readAdditionalSaveData(tag: ValueInput) {
         super.readAdditionalSaveData(tag)
-        data = LuckyProjectileData.readFromTag(tag)
-        val stackNBT = (JAVA_GAME_API.readNBTKey(tag, "item") ?: JAVA_GAME_API.readNBTKey(tag, "Item")) as? CompoundTag?
-        val stack = stackNBT?.let { MCItemStack.of(it) } ?: defaultDisplayItemStack
-        stack.count = 1
-        stack.count = 1
-        entityData.set(ITEM_STACK, stack)
+
+        try {
+            data = LuckyProjectileData(
+                trailFreqPerTick = tag.child("trail").getOrNull()?.getDoubleOr("frequency", 0.0) ?: 0.0,
+                trailDrops = dropsFromStrList(
+                    tag.child("trail").getOrNull()?.listOrEmpty("drops", Codec.STRING)?.toList() ?: emptyList()
+                ),
+                impactDrops = dropsFromStrList(tag.listOrEmpty("impact", Codec.STRING).toList()),
+                sourceId = tag.getString("sourceId").getOrNull() ?: JavaLuckyRegistry.blockId,
+            )
+
+            val itemInput = tag.child("item").getOrNull() ?: tag.child("Item").get()
+            val id = itemInput.getString("id").getOrDefault("minecraft:invalid")
+            val itemKey = MCIdentifier.parse(id)
+            if (!BuiltInRegistries.ITEM.containsKey(itemKey)) {
+                GAME_API.logError("Invalid item ID: '$id'")
+                return
+            }
+            val item = BuiltInRegistries.ITEM.getOptional(itemKey).get()
+            val stack = MCItemStack(item, 1)
+            itemInput.read("components", DataComponentMap.CODEC).getOrNull()?.let { stack.applyComponents(it) }
+            stack.count = 1
+            entityData.set(ITEM_STACK, stack)
+        } catch (e: Exception) {
+            GAME_API.logError("Failed to read LuckyProjectile", e)
+            entityData.set(ITEM_STACK, defaultDisplayItemStack)
+        }
     }
 
-    override fun addAdditionalSaveData(tag: CompoundTag) {
+    override fun addAdditionalSaveData(tag: ValueOutput) {
         super.addAdditionalSaveData(tag)
-        data.writeToTag(tag)
-        val stack = entityData.get(ITEM_STACK)
-        JAVA_GAME_API.writeNBTKey(tag, "Item", stack.save(CompoundTag()))
-    }
+        val parentNbt = CompoundTag()
 
-    override fun getAddEntityPacket(): Packet<ClientGamePacketListener> {
-        return ClientboundAddEntityPacket(this)
+        data.writeToTag(parentNbt)
+
+        val stack = entityData.get(ITEM_STACK)
+        val stackNbt = CompoundTag()
+        stackNbt.putString("id", BuiltInRegistries.ITEM.getKey(stack.item)?.path ?: "minecraft:air")
+        stackNbt.put("components", componentsToNbt(stack.components, registryAccess()))
+        parentNbt.put("Item", stackNbt)
+
+        storeCompound(tag, parentNbt)
     }
 }
 
 @OnlyInClient
-class LuckyProjectileRenderer(ctx: EntityRendererProvider.Context) : EntityRenderer<LuckyProjectile>(
+open class LuckyProjectileRenderState : EntityRenderState() {
+    var itemEntity: ItemEntityRenderState? = null
+}
+
+@OnlyInClient
+class LuckyProjectileRenderer(ctx: EntityRendererProvider.Context) : EntityRenderer<LuckyProjectile, LuckyProjectileRenderState>(
     ctx) {
-    override fun render(
-        entity: LuckyProjectile,
-        yawDeg: Float,
-        particleTicks: Float,
-        matrix: PoseStack,
-        vertexProvider: MultiBufferSource,
-        light: Int,
+    private var itemModelResolver = ctx.itemModelResolver
+
+    override fun submit(
+        renderState: LuckyProjectileRenderState,
+        poseStack: PoseStack,
+        nodeCollector: SubmitNodeCollector,
+        cameraRenderState: CameraRenderState
     ) {
-        val itemEntity = entity.itemEntity ?: return
-        entityRenderDispatcher.getRenderer(itemEntity)?.render(
-            itemEntity,
-            yawDeg, particleTicks,
-            matrix, vertexProvider, light
-        )
+        renderState.itemEntity?.let {
+            try {
+                entityRenderDispatcher.getRenderer(it).submit(
+                    it, poseStack, nodeCollector, cameraRenderState
+                )
+            } catch (e: Exception) {
+                GAME_API.logError("Failed to render LuckyProjectile: ${e}")
+            }
+        }
     }
 
-    override fun getTextureLocation(entity: LuckyProjectile): MCIdentifier? {
-        return null
+    override fun createRenderState(): LuckyProjectileRenderState {
+        return LuckyProjectileRenderState()
+    }
+
+    override fun extractRenderState(
+        entity: LuckyProjectile,
+        renderState: LuckyProjectileRenderState,
+        partialTick: Float
+    ) {
+        super.extractRenderState(entity, renderState, partialTick)
+        val itemEntity = ItemEntityRenderState()
+        val itemStack = entity.entityData.get(LuckyProjectile.ITEM_STACK)
+        itemEntity.extractItemGroupRenderState(entity, itemStack, itemModelResolver)
+        itemEntity.entityType = EntityType.ITEM
+        renderState.itemEntity = itemEntity
     }
 }

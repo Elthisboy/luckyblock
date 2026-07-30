@@ -1,33 +1,40 @@
 package mod.lucky.fabric
 
-import com.mojang.authlib.minecraft.client.MinecraftClient
+import com.mojang.serialization.DataResult
+import com.mojang.serialization.DynamicOps
+import com.mojang.serialization.MapCodec
+import com.mojang.serialization.MapLike
+import com.mojang.serialization.RecordBuilder
 import mod.lucky.common.*
 import mod.lucky.common.Random
 import mod.lucky.common.attribute.*
 import mod.lucky.java.*
-import mod.lucky.fabric.*
 import net.fabricmc.api.EnvType
 import net.fabricmc.api.Environment
 import net.fabricmc.loader.api.FabricLoader
-import net.fabricmc.loader.impl.FabricLoaderImpl
-import net.minecraft.client.Minecraft
+import net.minecraft.core.HolderLookup
+import net.minecraft.core.component.DataComponentMap
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
 import net.minecraft.nbt.LongArrayTag
+import net.minecraft.nbt.NbtAccounter
 import net.minecraft.nbt.NbtIo
-import net.minecraft.network.chat.Component
+import net.minecraft.nbt.NbtOps
+import net.minecraft.resources.RegistryOps
+import net.minecraft.resources.ResourceKey
 import net.minecraft.util.datafix.fixes.ItemIdFix
 import net.minecraft.util.datafix.fixes.ItemStackTheFlatteningFix
-import net.minecraft.world.entity.projectile.Arrow
-import net.minecraft.world.item.Items
+import net.minecraft.world.entity.projectile.arrow.Arrow
 import net.minecraft.world.item.enchantment.EnchantmentHelper
 import net.minecraft.world.item.enchantment.Enchantments
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.block.entity.ChestBlockEntity
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
+import net.minecraft.world.level.storage.ValueOutput
 import java.io.File
 import java.io.InputStream
 import java.util.*
+import java.util.stream.Stream
 
 @Environment(EnvType.CLIENT)
 annotation class OnlyInClient
@@ -37,14 +44,81 @@ annotation class OnlyInServer
 
 fun isClientWorld(world: MCIWorld): Boolean = world.isClientSide
 
-fun toMCItemStack(stack: ItemStack): MCItemStack {
-    val mcStack = MCItemStack(BuiltInRegistries.ITEM.getOptional(MCIdentifier(stack.itemId)).orElse(null) ?: Items.AIR, stack.count)
-    if (stack.nbt != null) mcStack.tag = stack.nbt as CompoundTag
+/**
+ * NeoForge adds `ValueOutput.store(CompoundTag)`, which splices a raw compound
+ * into the current level; vanilla only offers codec-based stores. This MapCodec
+ * writes each entry of a CompoundTag at the current level, giving us the same
+ * on-disk layout as the NeoForge build.
+ */
+private val INLINE_COMPOUND: MapCodec<CompoundTag> = object : MapCodec<CompoundTag>() {
+    override fun <T : Any> keys(ops: DynamicOps<T>): Stream<T> = Stream.empty()
+
+    override fun <T : Any> decode(ops: DynamicOps<T>, input: MapLike<T>): DataResult<CompoundTag> {
+        val result = CompoundTag()
+        input.entries().forEach { pair ->
+            ops.getStringValue(pair.first).result().ifPresent { key ->
+                result.put(key, ops.convertTo(NbtOps.INSTANCE, pair.second))
+            }
+        }
+        return DataResult.success(result)
+    }
+
+    override fun <T : Any> encode(input: CompoundTag, ops: DynamicOps<T>, prefix: RecordBuilder<T>): RecordBuilder<T> {
+        var builder = prefix
+        for (key in input.keySet()) {
+            val value = input.get(key) ?: continue
+            builder = builder.add(key, NbtOps.INSTANCE.convertTo(ops, value))
+        }
+        return builder
+    }
+}
+
+fun storeCompound(out: ValueOutput, tag: CompoundTag) {
+    out.store(INLINE_COMPOUND, tag)
+}
+
+fun nbtToComponents(tag: CompoundTag, access: HolderLookup.Provider): DataComponentMap {
+    try {
+        val ops = RegistryOps.create(NbtOps.INSTANCE, access)
+        return DataComponentMap.CODEC
+            .parse(ops, tag)
+            .getOrThrow()
+    } catch (e: Exception) {
+        GAME_API.logError("Failed to parse NBT: ${e}")
+        return DataComponentMap.EMPTY
+    }
+}
+
+fun componentsToNbt(components: DataComponentMap, access: HolderLookup.Provider): CompoundTag {
+    try {
+        val ops = RegistryOps.create(NbtOps.INSTANCE, access)
+        @Suppress("UNCHECKED_CAST")
+        return (DataComponentMap.CODEC
+            .encodeStart(ops, components)
+            .result() as Optional<CompoundTag>)
+            .orElseThrow()
+    } catch (e: Exception) {
+        GAME_API.logError("Failed to parse components: ${e}")
+        return CompoundTag()
+    }
+}
+
+fun toMCItemStack(stack: ItemStack, access: HolderLookup.Provider): MCItemStack {
+    val item = BuiltInRegistries.ITEM.get(MCIdentifier.parse(stack.itemId)).get()
+    val mcStack = MCItemStack(item, stack.count)
+    if (stack.nbt != null) {
+        val components = nbtToComponents(stack.nbt as CompoundTag, access)
+        mcStack.applyComponents(components)
+    }
     return mcStack
 }
 
-fun toItemStack(stack: MCItemStack): ItemStack {
-    return ItemStack(JAVA_GAME_API.getItemId(stack.item) ?: "minecraft:air", stack.count, stack.tag)
+fun toItemStack(stack: MCItemStack, access: HolderLookup.Provider, skipComponents: Boolean = false): ItemStack {
+    return ItemStack(
+        JAVA_GAME_API.getItemId(stack.item) ?: "minecraft:air",
+        stack.count,
+        if (skipComponents) null else componentsToNbt(stack.components, access)
+    )
 }
 
 object FabricJavaGameAPI : JavaGameAPI {
@@ -55,10 +129,6 @@ object FabricJavaGameAPI : JavaGameAPI {
     override fun getModVersion(): String {
         return FabricLoader.getInstance().getModContainer("lucky")
             .get().metadata.version.friendlyString
-
-    }
-    override fun getMinecraftVersion(): String {
-        return (FabricLoader.getInstance() as FabricLoaderImpl).gameProvider.normalizedGameVersion
     }
 
     override fun getGameDir(): File {
@@ -99,27 +169,26 @@ object FabricJavaGameAPI : JavaGameAPI {
 
     override fun nbtToAttr(tag: NBTTag): Attr {
         return when (tag) {
-            is StringTag -> stringAttrOf(tag.asString)
+            is StringTag -> stringAttrOf(tag.asString().get())
             // note that booleans are stored as bytes
-            is ByteTag -> ValueAttr(AttrType.BYTE, tag.asByte)
-            is ShortTag -> ValueAttr(AttrType.SHORT, tag.asShort)
-            is IntTag -> ValueAttr(AttrType.INT, tag.asInt)
-            is LongTag -> ValueAttr(AttrType.LONG, tag.asLong)
-            is FloatTag -> ValueAttr(AttrType.FLOAT, tag.asFloat)
-            is DoubleTag -> ValueAttr(AttrType.DOUBLE, tag.asDouble)
+            is ByteTag -> ValueAttr(AttrType.BYTE, tag.asByte().get())
+            is ShortTag -> ValueAttr(AttrType.SHORT, tag.asShort().get())
+            is IntTag -> ValueAttr(AttrType.INT, tag.asInt().get())
+            is LongTag -> ValueAttr(AttrType.LONG, tag.asLong().get())
+            is FloatTag -> ValueAttr(AttrType.FLOAT, tag.asFloat().get())
+            is DoubleTag -> ValueAttr(AttrType.DOUBLE, tag.asDouble().get())
             is ByteArrayTag -> ValueAttr(AttrType.BYTE_ARRAY, tag.asByteArray)
             is IntArrayTag -> ValueAttr(AttrType.INT_ARRAY, tag.asIntArray)
             is LongArrayTag -> ValueAttr(AttrType.INT_ARRAY, tag.asLongArray)
             is ListTag -> ListAttr(tag.map { nbtToAttr(it) })
             is CompoundTag -> {
-                dictAttrOf(*tag.allKeys.map {
+                dictAttrOf(*tag.keySet().map {
                     it to tag.get(it)?.let { v -> nbtToAttr(v) }
                 }.toTypedArray())
             }
             else -> throw Exception()
         }
     }
-
 
     override fun readNBTKey(tag: NBTTag, k: String): NBTTag? {
         return (tag as CompoundTag).get(k)
@@ -129,9 +198,8 @@ object FabricJavaGameAPI : JavaGameAPI {
         (tag as CompoundTag).put(k, v as Tag)
     }
 
-
     override fun readCompressedNBT(stream: InputStream): Attr {
-        val nbt = NbtIo.readCompressed(stream)
+        val nbt = NbtIo.readCompressed(stream, NbtAccounter.unlimitedHeap())
         return nbtToAttr(nbt)
     }
 
@@ -142,7 +210,7 @@ object FabricJavaGameAPI : JavaGameAPI {
         yawOffsetDeg: Double,
         pitchOffsetDeg: Double,
     ): Pair<Vec3d, Vec3d> {
-        val arrowEntity = Arrow(world as MCServerWorld, player as MCPlayerEntity)
+        val arrowEntity = Arrow(world as MCServerWorld, player as MCPlayerEntity, MCItemStack.EMPTY, null)
         arrowEntity.shootFromRotation(
             player,
             (GAME_API.getPlayerHeadPitchDeg(player) + yawOffsetDeg).toFloat(),
@@ -169,32 +237,21 @@ object FabricJavaGameAPI : JavaGameAPI {
         return (world as MCServerWorld).getEntity(UUID.fromString(uuid))
     }
 
-    @OnlyInClient
-    override fun showClientMessage(textJsonStr: String) {
-        val player = Minecraft.getInstance().player
-        val mcText = Component.Serializer.fromJson(textJsonStr)
-        if (mcText === null) {
-            GAME_API.logError("Invalid JSON text: $textJsonStr")
-            return
-        }
-        player?.sendSystemMessage(mcText)
-    }
-
     override fun getBlockId(block: Block): String? {
-        return BuiltInRegistries.BLOCK.getResourceKey(block as MCBlock).orElse(null)?.location()?.toString()
+        return BuiltInRegistries.BLOCK.getKey(block as MCBlock)?.toString()
     }
 
     override fun getItemId(item: Item): String? {
-        return BuiltInRegistries.ITEM.getResourceKey(item as MCItem).orElse(null)?.location()?.toString()
+        return BuiltInRegistries.ITEM.getKey(item as MCItem)?.toString()
     }
 
     override fun isValidItemId(id: String): Boolean {
-        return BuiltInRegistries.ITEM.getOptional(MCIdentifier(id)).isPresent
+        return BuiltInRegistries.ITEM.containsKey(MCIdentifier.parse(id))
     }
 
     override fun getEntityTypeId(entity: Entity): String {
-        val key = BuiltInRegistries.ENTITY_TYPE.getResourceKey((entity as MCEntity).type).orElse(null)?.location()
-        return key?.toString() ?: ""
+        val key = BuiltInRegistries.ENTITY_TYPE.getKey((entity as MCEntity).type)
+        return key?.toString() ?: "<invalid entity ${key}>"
     }
 
     override fun generateChestLoot(world: World, pos: Vec3i, lootTableId: String, random: Random): ListAttr {
@@ -202,10 +259,13 @@ object FabricJavaGameAPI : JavaGameAPI {
 
         // world is needed to prevent a NullPointerException
         chestEntity.setLevel(toServerWorld(world))
-        chestEntity.setLootTable(MCIdentifier(lootTableId), random.randInt(0..Int.MAX_VALUE).toLong())
+        chestEntity.setLootTable(
+            ResourceKey.create(Registries.LOOT_TABLE, MCIdentifier.parse(lootTableId)),
+            random.randInt(0..Int.MAX_VALUE).toLong()
+        )
         chestEntity.unpackLootTable(null)
 
-        val tag = chestEntity.saveWithFullMetadata()
+        val tag = chestEntity.saveWithFullMetadata((world as MCWorld).registryAccess())
         return JAVA_GAME_API.nbtToAttr(JAVA_GAME_API.readNBTKey(tag, "Items")!!) as ListAttr
     }
 
@@ -214,7 +274,10 @@ object FabricJavaGameAPI : JavaGameAPI {
     }
 
     override fun hasSilkTouch(player: PlayerEntity): Boolean {
-        return EnchantmentHelper.getEnchantmentLevel(Enchantments.SILK_TOUCH, player as MCPlayerEntity) > 0
+        return try {
+            val enchantment = (player as MCPlayerEntity).level().holderLookup(Registries.ENCHANTMENT).getOrThrow(Enchantments.SILK_TOUCH)
+            EnchantmentHelper.getEnchantmentLevel(enchantment, player) > 0
+        } catch (e: IllegalStateException) { false }
     }
 
     override fun convertLegacyItemId(id: Int, data: Int): String? {
@@ -225,7 +288,7 @@ object FabricJavaGameAPI : JavaGameAPI {
 
     override fun readNbtStructure(stream: InputStream): Pair<MinecraftNbtStructure, Vec3i> {
         val structure = StructureTemplate()
-        structure.load(BuiltInRegistries.BLOCK.asLookup(), NbtIo.readCompressed(stream))
+        structure.load(BuiltInRegistries.BLOCK, NbtIo.readCompressed(stream, NbtAccounter.unlimitedHeap()))
         return Pair(structure, toVec3i(structure.size))
     }
 }
