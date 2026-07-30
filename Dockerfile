@@ -1,7 +1,9 @@
 #
 # Base
 #
-FROM eclipse-temurin:21-jdk-jammy AS base
+# Minecraft 26.1 requires Java 25, and Fabric Loom requires the Gradle daemon
+# itself to run on it (see gradle/gradle-daemon-jvm.properties).
+FROM eclipse-temurin:25-jdk AS base
 
 RUN apt-get update && apt-get install -y git
 
@@ -31,7 +33,8 @@ FROM base AS test
 WORKDIR /app
 COPY . .
 
-RUN ./gradlew :common:jvmTest --info
+# :common is a plain Kotlin/JVM module, so the task is `test`, not `jvmTest`
+RUN ./gradlew :common:test --info
 RUN ./gradlew :tools:test --info
 
 #
@@ -42,5 +45,5 @@ FROM base AS build
 WORKDIR /app
 COPY . .
 RUN ./gradlew :neoforge:build
-#RUN ./gradlew :fabric:build
+RUN ./gradlew :fabric:build
 #RUN ./gradlew :bedrock:build
