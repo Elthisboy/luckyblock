@@ -1,6 +1,6 @@
 projects:
   lucky-block-neoforge:
-    version: 26.1.2-14.0
+    version: 26.1.2-14.1
     dependencies:
       java:
         minInclusive: 25
@@ -19,7 +19,7 @@ projects:
       kotlinforforge: 6.3.0
 
   lucky-block-fabric:
-    version: 26.1.2-14.0
+    version: 26.1.2-14.1
     dependencies:
       java:
         minInclusive: 25
